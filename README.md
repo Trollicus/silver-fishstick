@@ -5,9 +5,10 @@ Simple yet effective Linkvertise bypass for any link!
 
 Built with Educational Purposes.
 
+
 ## Demonstration
 
-[![](https://img.youtube.com/vi/UZnLhTMhXBQ/0.jpg)](https://www.youtube.com/watch?v=UZnLhTMhXBQ)
+[![](https://github.com/Trollicus/silver-fishstick/assets/40140975/66c0a474-5aa4-4afd-b1ea-17ee40e08612)
 
 
 ## Getting Started
