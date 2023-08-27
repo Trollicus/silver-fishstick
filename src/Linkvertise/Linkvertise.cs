@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
@@ -13,15 +13,14 @@ public class Linkvertise
 
     public async Task Bypass(Uri uri)
     {
-        const string link = "https://publisher.linkvertise.com";
-
         var pathSegments = uri.AbsolutePath.Trim('/').Split('/');
         var id = pathSegments[0];
         var name = pathSegments[1];
 
         Console.WriteLine("Attempting Phase 1...");
 
-        var phase1 = await _httpHandler.PostAsync($"{link}/api/v1/redirect/link/static/{id}/{name}", HttpMethod.Get,
+        var phase1 = await _httpHandler.PostAsync(
+            $"https://publisher.linkvertise.com/api/v1/redirect/link/static/{id}/{name}", HttpMethod.Get,
             new[]
             {
                 new HttpHandler.RequestHeadersEx("User-Agent",
@@ -29,40 +28,17 @@ public class Linkvertise
                 new HttpHandler.RequestHeadersEx("Connection", "close"),
                 new HttpHandler.RequestHeadersEx("Accept", "application/json")
             });
-        if (!phase1.IsSuccessStatusCode)
-        {
-            throw new Exception("Failed phase!");
-        }
 
         var response1 = await phase1.Content.ReadAsStringAsync();
 
-        Dictionary<string, string> dictionary = new()
-        {
-            {
-                "paste",
-                "PASTE"
-            },
-            {
-                "linkvertise.com",
-                "PASTE"
-            }
-        };
-
         var userToken = "";
-        int dlid = 0;
-        var targetType = "";
-
+        var dlid = 0;
 
         if (JsonHelper.TryDeserialize<Response.Root>(response1, out var data) && data != null)
         {
             userToken = data.user_token;
-            var dlink = data.data.Link;
             Debug.Assert(data.data.Link != null, "data.data.Link != null");
             dlid = data.data.Link.Id;
-
-            targetType = dictionary.TryGetValue(dlink?.TargetType ?? string.Empty, out var value) ? value :
-                dictionary.TryGetValue(dlink?.TargetHost ?? string.Empty, out var value1) ? value1 :
-                "target";
         }
 
         Console.WriteLine("Attempting Phase 2...");
@@ -87,7 +63,7 @@ public class Linkvertise
 
 
         var phase3 = await _httpHandler.PostAsync(
-            $"{link}/api/v1/redirect/link/{id}/{name}/traffic-validationv2?X-Linkvertise-UT={userToken}",
+            $"https://publisher.linkvertise.com/api/v1/redirect/link/{id}/{name}/traffic-validationv2?X-Linkvertise-UT={userToken}",
             HttpMethod.Post, $"{{\"token\":\"{jsonp}\",\"type\":\"cq\"}}");
 
         var response3 = await phase3.Content.ReadAsStringAsync();
@@ -102,8 +78,9 @@ public class Linkvertise
         Console.WriteLine("Attempting Phase 4...");
 
         var phase4 = await _httpHandler.PostAsync(
-            $"{link}/api/v1/redirect/link/{id}/{name}/{targetType}?X-Linkvertise-UT={userToken}", HttpMethod.Post,
-            $"{{\"serial\": \"{Convert.ToBase64String(Encoding.UTF8.GetBytes($"{{\"link_id\": {dlid}, \"timestamp\": \"{((DateTimeOffset)DateTime.Now).ToUnixTimeMilliseconds()}\", \"random\":6548307}}"))}\", \"token\": \"{targets}\"}}",
+            $"https://publisher.linkvertise.com/api/v1/redirect/link/{id}/{name}/target?X-Linkvertise-UT={userToken}",
+            HttpMethod.Post,
+            $"{{\"serial\": \"{Convert.ToBase64String(Encoding.UTF8.GetBytes($"{{\"link_id\": {dlid}, \"timestamp\": \"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}\", \"random\":6548307}}"))}\", \"token\": \"{targets}\"}}",
             new[]
             {
                 new HttpHandler.RequestHeadersEx("User-Agent",
