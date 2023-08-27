@@ -16,7 +16,6 @@ public class HttpHandler
     /// </summary>
     /// <param name="proxyHost">The proxy host, if a proxy should be used.</param>
     /// <param name="proxyPort">The proxy port, if a proxy should be used.</param>
-    [Obsolete("Obsolete")]
     public HttpHandler(string proxyHost = "", int proxyPort = 0)
     {
         var clientHandler = new HttpClientHandler
