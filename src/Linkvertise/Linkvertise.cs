@@ -1,7 +1,4 @@
-using System.Diagnostics;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Web;
+using System.Text.Json;
 using LinkvertiseBypass.Handlers.Json;
 using LinkvertiseBypass.Handlers.WebRequests;
 
@@ -11,97 +8,123 @@ public class Linkvertise
 {
 	private readonly HttpHandler _httpHandler = new();
 
-	public async Task Bypass(Uri uri)
+    private readonly HttpHandler.RequestHeadersEx[] _headers =
+    {
+        new("Origin", "https://linkvertise.com"),
+        new("Referer", "https://linkvertise.com/"),
+        new("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv,109.0) Gecko/20100101 Firefox/119.0"),
+        new("Accept", "application/json"),
+        new("Accept-Language", "en-CA,en-US;q=0.7,en;q=0.3"),
+        new("Sec-Fetch-Dest", "empty"),
+        new("Sec-Fetch-Mode", "cors"),
+        new("Sec-Fetch-Site", "same-site")
+    };
+
+    private (string id, string name) ParseUrl(Uri uri)
+    {
+        string id, name;
+        string[] segments = uri.AbsolutePath.Trim('/').Split('/');
+
+        if (segments.Length < 2)
+        {
+            throw new Exception("Invalid path segments");
+        }
+
+        if (uri.AbsolutePath.Contains("download"))
+        {
+            id = segments[1];
+            name = segments[2];
+        }
+        else
+        {
+            id = segments[0];
+            name = segments[1];
+        }
+
+        return (id, name);
+    }
+
+    public async Task<string> ExecuteGraphQlRequestAsync<T>(T requestData, string endpoint, Func<JsonElement, string> resultSelector)
+    {
+        JsonDocument jsonData = JsonSerializer.SerializeToDocument(requestData);
+        string requestJson = jsonData.RootElement.GetProperty("root").ToString();
+
+        HttpResponseMessage responseData = await _httpHandler.PostAsync(endpoint, HttpMethod.Post, requestJson, _headers);
+        string response = responseData.Content.ReadAsStringAsync().Result;
+
+        return resultSelector(JsonDocument.Parse(response).RootElement.GetProperty("data"));
+    }
+
+    public T CreateRequestData<T>(string userId, string url, string? accessToken = null, string? adCompletedToken = null) where T : BaseRequest
+    {
+        T request = Activator.CreateInstance<T>();
+        request.root = new BaseRequest.RootMain
+        {
+            OperationName = BaseRequest.GetOperation<T>(),
+            Query = BaseRequest.GetMutationQuery<T>(),
+            Variables = new BaseRequest.Variables
+            {
+                LinkIdentification = new BaseRequest.LinkIdentification
+                {
+                    UserIdAndUrl = new BaseRequest.UserIdAndUrl
+                    {
+                        UserId = userId,
+                        Url = url
+                    }
+                },
+                Origin = "https://linkvertise.com/",
+                AdditionalData = new BaseRequest.AdditionalData
+                {
+                    Taboola = new BaseRequest.Taboola
+                    {
+                        UserId = "",
+                        Url = ""
+                    }
+                }
+            }
+        };
+
+        if (typeof(T) == typeof(AdCompletedToken))
+        {
+            request.root.Variables.CompleteDetailPageContent = new AdCompletedToken.CompleteDetailPageContent
+            {
+                access_token = accessToken
+            };
+        }
+        else if (typeof(T) == typeof(FinalResponse))
+        {
+            request.root.Variables.Token = adCompletedToken;
+        }
+
+        return request;
+    }
+
+
+    public async Task Bypass(Uri uri)
 	{
-		var (id, name) = uri.AbsolutePath.Trim('/').Split('/') switch
-		{
-			{ Length: >= 2 } segments => (segments[0], segments[1]),
-			_ => throw new Exception("Invalid path segments")
-		};
+        
+        (string id, string name) = ParseUrl(uri);
 
-		Console.WriteLine("Attempting Phase 1...");
+        // Part 1: Grab Ads Access Tokens
+        Console.WriteLine("Attempting Phase 1...");
 
-		var phase1 = await _httpHandler.PostAsync(
-			$"https://publisher.linkvertise.com/api/v1/redirect/link/static/{id}/{name}", HttpMethod.Get,
-			new[]
-			{
-				new HttpHandler.RequestHeadersEx("User-Agent",
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/116.0"),
-				new HttpHandler.RequestHeadersEx("Connection", "close"),
-				new HttpHandler.RequestHeadersEx("Accept", "application/json")
-			});
+        AdAccessToken accessData = CreateRequestData<AdAccessToken>(id, name);
+        string adToken = await ExecuteGraphQlRequestAsync(accessData, "https://publisher.linkvertise.com/graphql", data => data.GetProperty("getDetailPageContent").GetProperty("access_token").ToString());
 
-		var response1 = await phase1.Content.ReadAsStringAsync();
+        // Part 2 Get Ad Completed Token
+        Console.WriteLine("Attempting Phase 2...");
 
-		var userToken = "";
-		var dlid = 0;
-		var targetType = "";
+        AdCompletedToken adCompletedData = CreateRequestData<AdCompletedToken>(id, name, adToken);
+        string adCompletedToken = await ExecuteGraphQlRequestAsync(adCompletedData, "https://publisher.linkvertise.com/graphql", data => data.GetProperty("completeDetailPageContent").GetProperty("TARGET").ToString());
+        
+        // Part 3 Get Final Url
+        Console.WriteLine("Attempting Phase 3...");
 
-		if (JsonHelper.TryDeserialize<Response.Root>(response1, out var data) && data != null)
-		{
-			userToken = data.user_token;
-			Debug.Assert(data.data.Link != null, "data.data.Link != null");
-			dlid = data.data.Link.Id;
-			targetType = data.data.Link.TargetType == "PASTE" || data.data.Link.TargetHost == "linkvertise.com" ? "paste" : "target";
+        FinalResponse finalResponse = CreateRequestData<FinalResponse>(id, name, null, adCompletedToken);
+        string finalUrl = await ExecuteGraphQlRequestAsync(finalResponse, "https://publisher.linkvertise.com/graphql", data => data.GetProperty("getDetailPageTarget").GetProperty("url").ToString());
 
+        Console.WriteLine(finalUrl);
 
-		}
-
-		Console.WriteLine("Attempting Phase 2...");
-
-		var phase2 = await _httpHandler.PostAsync(
-			$"https://obseu.bizseasky.com/ct?id=14473&url={HttpUtility.UrlEncode(uri.ToString())}", HttpMethod.Get,
-			new[]
-			{
-				new HttpHandler.RequestHeadersEx("User-Agent",
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/116.0"),
-				new HttpHandler.RequestHeadersEx("Accept", "application/json")
-			});
-
-		var response2 = await phase2.Content.ReadAsStringAsync();
-
-		Match match = Regex.Match(response2, "\"jsonp\":\"([^\"]+)\"");
-
-		var jsonp = match.Groups[1].Value;
-
-
-		Console.WriteLine("Attempting Phase 3...");
-
-
-		var phase3 = await _httpHandler.PostAsync(
-			$"https://publisher.linkvertise.com/api/v1/redirect/link/{id}/{name}/traffic-validationv2?X-Linkvertise-UT={userToken}",
-			HttpMethod.Post, $"{{\"token\":\"{jsonp}\",\"type\":\"cq\"}}");
-
-		var response3 = await phase3.Content.ReadAsStringAsync();
-
-		var targets = "";
-
-		if (JsonHelper.TryDeserialize<Phase3.Root>(response3, out var hPhase3) && data != null)
-		{
-			targets = hPhase3?.Data?.Tokens?.Target;
-		}
-
-		Console.WriteLine("Attempting Phase 4...");
-
-		var phase4 = await _httpHandler.PostAsync(
-			$"https://publisher.linkvertise.com/api/v1/redirect/link/{id}/{name}/{targetType}?X-Linkvertise-UT={userToken}",
-			HttpMethod.Post,
-			$"{{\"serial\": \"{Convert.ToBase64String(Encoding.UTF8.GetBytes($"{{\"link_id\": {dlid}, \"timestamp\": \"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}\", \"random\":6548307}}"))}\", \"token\": \"{targets}\"}}",
-			new[]
-			{
-				new HttpHandler.RequestHeadersEx("User-Agent",
-					"curl/7.54.1"),
-				new HttpHandler.RequestHeadersEx("Accept", "application/json")
-			});
-
-		var response4 = await phase4.Content.ReadAsStringAsync();
-
-		if (JsonHelper.TryDeserialize<Phase4.Root>(response4, out var uPhase4) && uPhase4 != null)
-		{
-			Console.WriteLine(uPhase4.Data?.Target ?? uPhase4.Data?.Paste);
-
-		}
-
-		Console.ReadLine();
+        Console.ReadLine();
 	}
 }
